@@ -1,0 +1,8 @@
+name: dslink_dart_vm
+description: Dart VM DSLink
+dependencies:
+  dslink:
+    git: https://github.com/IOT-DSA/sdk-dslink-dart.git
+  http: ">=0.11.2 <0.12.0"
+  vm_service:
+    git: https://github.com/DirectMyFile/vm_service.git
