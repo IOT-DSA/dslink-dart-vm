@@ -1,10 +1,31 @@
 import "package:dslink/dslink.dart";
+
+import "dart:async";
 import "dart:io";
 
 import "package:vm_service/service_io.dart";
-import "package:observe/observe.dart";
 
 LinkProvider link;
+
+/// An Action for Deleting a Given Node
+class DeleteActionNode extends SimpleNode {
+  final String targetPath;
+
+  /// When this action is invoked, [provider.removeNode] will be called with [targetPath].
+  DeleteActionNode(String path, SimpleNodeProvider provider, this.targetPath) : super(path, provider);
+
+  /// When this action is invoked, [provider.removeNode] will be called with the parent of this action.
+  DeleteActionNode.forParent(String path, SimpleNodeProvider provider)
+      : this(path, provider, new Path(path).parentPath);
+
+  /// Handles an action invocation and deletes the target path.
+  @override
+  Object onInvoke(Map<String, dynamic> params) {
+    provider.removeNode(targetPath);
+    link.save();
+    return {};
+  }
+}
 
 main(List<String> args) async {
   link = new LinkProvider(args, "DartVM-", nodes: {
@@ -34,7 +55,8 @@ main(List<String> args) async {
     }
   }, profiles: {
     "addVM": (String path) => new AddVMNode(path),
-    "vm": (String path) => new VMNode(path)
+    "vm": (String path) => new VMNode(path),
+    "remove": (String path) => new DeleteActionNode.forParent(path, link.provider)
   }, autoInitialize: false);
 
   link.init();
@@ -97,11 +119,42 @@ class VMNode extends SimpleNode {
 
     target = new WebSocketVMTarget(url);
     vm = new WebSocketVM(target);
+
+    link.addNode("${path}/Remove", {
+      r"$name": "Remove",
+      r"$invokable": "write",
+      r"$result": "values",
+      r"$is": "remove"
+    });
+
     vm = await vm.load();
 
     link.addNode("${path}/Version", {
       r"$type": "string",
       "?value": vm.version
+    });
+
+    link.addNode("${path}/PID", {
+      r"$type": "int",
+      "?value": vm.pid
+    });
+    
+    link.addNode("${path}/Architecture_Bits", {
+      r"$name": "Architecture Bits",
+      r"$type": "int",
+      "?value": vm.architectureBits
+    });
+
+    link.addNode("${path}/Start_Time", {
+      r"$name": "Start Time",
+      r"$type": "string",
+      "?value": vm.startTime.toString()
+    });
+
+    link.addNode("${path}/Uptime", {
+      r"$type": "int",
+      "?value": vm.upTime.inMilliseconds,
+      "@unit": "ms"
     });
 
     link.addNode("${path}/Isolates", {});
@@ -113,91 +166,131 @@ class VMNode extends SimpleNode {
         return;
       }
       reloading = true;
+      if (vm == null) {
+        return;
+      }
+
+      if (vm.isDisconnected) {
+        target = new WebSocketVMTarget(url);
+        vm = new WebSocketVM(target);
+      }
+
+      await vm.reload();
+      await vm.reloadIsolates();
+
+      if (vm == null) {
+        return;
+      }
+
+      link.updateValue("${path}/Uptime", vm.upTime.inMilliseconds);
 
       for (Isolate isolate in vm.isolates) {
-        await isolate.reload();
         var p = "${path}/Isolates/${isolate.id.split("/").skip(1).join("_")}";
         SimpleNode node = link[p];
 
         if (node == null) {
-          node = link.addNode(p, {});
-        }
-
-        node.load({
-          r"$name": isolate.name,
-          "New_Generation": {
-            r"$name": "New Generation",
-            "Collections": {
-              r"$type": "int",
-              "?value": isolate.newSpace.collections
+          node = link.addNode(p, {
+            r"$name": isolate.name,
+            "Execute": {
+              r"$type": "string",
+              "?value": isolate.running ? isolate.topFrame.location.toString() : "Idle"
             },
-            "Average_Collection_Interval": {
-              r"$type": "number",
-              r"$name": "Average Collection Interval",
-              "?value": isolate.newSpace.averageCollectionPeriodInMillis
+            "Running": {
+              r"$type": "bool",
+              "?value": isolate.running
             },
-            "Used": {
-              r"$type": "int",
-              r"@unit": "bytes",
-              "?value": isolate.newSpace.used
+            "New_Generation": {
+              r"$name": "New Generation",
+              "Collections": {
+                r"$type": "int",
+                "?value": isolate.newSpace.collections
+              },
+              "Average_Collection_Interval": {
+                r"$type": "number",
+                r"$name": "Average Collection Interval",
+                "?value": isolate.newSpace.averageCollectionPeriodInMillis,
+                "@unit": "ms"
+              },
+              "Used": {
+                r"$type": "int",
+                r"@unit": "bytes",
+                "?value": isolate.newSpace.used
+              },
+              "Capacity": {
+                r"$type": "int",
+                "@unit": "bytes",
+                "?value": isolate.newSpace.capacity
+              },
+              "External": {
+                r"$type": "int",
+                "@unit": "bytes",
+                "?value": isolate.newSpace.external
+              }
             },
-            "Capacity": {
-              r"$type": "int",
-              "@unit": "bytes",
-              "?value": isolate.newSpace.capacity
+            "Old_Generation": {
+              r"$name": "Old Generation",
+              "Collections": {
+                r"$type": "int",
+                "?value": isolate.oldSpace.collections
+              },
+              "Average_Collection_Interval": {
+                r"$type": "number",
+                r"$name": "Average Collection Interval",
+                "?value": isolate.oldSpace.averageCollectionPeriodInMillis,
+                "@unit": "ms"
+              },
+              "Used": {
+                r"$type": "int",
+                r"@unit": "bytes",
+                "?value": isolate.oldSpace.used
+              },
+              "Capacity": {
+                r"$type": "int",
+                "@unit": "bytes",
+                "?value": isolate.oldSpace.capacity
+              },
+              "External": {
+                r"$type": "int",
+                "@unit": "bytes",
+                "?value": isolate.oldSpace.external
+              }
             },
-            "External": {
+            "Start_Time": {
+              r"$name": "Start Time",
+              r"$type": "string",
+              "?value": isolate.startTime.toString()
+            },
+            "Uptime": {
               r"$type": "int",
-              "@unit": "bytes",
-              "?value": isolate.newSpace.external
+              "?value": isolate.upTime.inMilliseconds,
+              "@unit": "ms"
+            },
+            "Idle": {
+              r"$type": "bool",
+              "?value": isolate.idle
+            },
+            "Paused": {
+              r"$type": "bool",
+              "?value": isolate.paused
             }
-          },
-          "Old_Generation": {
-            r"$name": "Old Generation",
-            "Collections": {
-              r"$type": "int",
-              "?value": isolate.oldSpace.collections
-            },
-            "Average_Collection_Interval": {
-              r"$type": "number",
-              r"$name": "Average Collection Interval",
-              "?value": isolate.oldSpace.averageCollectionPeriodInMillis
-            },
-            "Used": {
-              r"$type": "int",
-              r"@unit": "bytes",
-              "?value": isolate.oldSpace.used
-            },
-            "Capacity": {
-              r"$type": "int",
-              "@unit": "bytes",
-              "?value": isolate.oldSpace.capacity
-            },
-            "External": {
-              r"$type": "int",
-              "@unit": "bytes",
-              "?value": isolate.oldSpace.external
-            }
-          },
-          "Start_Time": {
-            r"$name": "Start Time",
-            r"$type": "string",
-            "?value": isolate.startTime.toIso8601String()
-          },
-          "Uptime": {
-            r"$type": "int",
-            "?value": isolate.upTime.inMilliseconds,
-            "@unit": "ms"
-          },
-          "Idle": {
-            r"$type": "bool",
-            "?value": isolate.idle
-          },
-          "Paused": {
-            r"$type": "bool",
-            "?value": isolate.paused
+          });
+        } else {
+          var u = (n, v) => link.val("${node.path}/${n}", v);
+          u("Execute", isolate.running ? isolate.topFrame.location.toString() : "Idle");
+          u("Running", isolate.running);
+          for (var a in const ["New", "Old"]) {
+            var space = a == "New" ? isolate.newSpace : isolate.oldSpace;
+            u("${a}_Generation/Collections", space.collections);
+            u("${a}_Generation/Average_Collection_Interval", space.averageCollectionPeriodInMillis);
+            u("${a}_Generation/Capacity", space.capacity);
+            u("${a}_Generation/Used", space.used);
+            u("${a}_Generation/External", space.external);
           }
-        });
+          u("Start_Time", isolate.startTime.toString());
+          u("Uptime", isolate.upTime.inMilliseconds);
+          u("Idle", isolate.idle);
+          u("Paused", isolate.paused);
+        }
       }
 
       link["${path}/Isolates"].children.keys.toList().forEach((x) {
@@ -210,14 +303,16 @@ class VMNode extends SimpleNode {
 
     await update();
 
-    vm.isolates.changes.listen((List<ChangeRecord> records) {
-      update();
-    });
-
-    Scheduler.every(Interval.ONE_SECOND, () async {
-      await update();
+    timer = Scheduler.every(Interval.HALF_SECOND, () async {
+      try {
+        await update();
+      } catch (e) {
+        print("Warning in ${path}: ${e}");
+      }
     });
   }
+
+  Timer timer;
 
   @override
   Map save() {
@@ -228,7 +323,20 @@ class VMNode extends SimpleNode {
     }..addAll(attributes);
   }
 
+  @override
+  onRemoving() {
+    if (vm != null && !vm.isDisconnected) {
+      vm.disconnect();
+    }
+    vm = null;
+    target = null;
+
+    if (timer != null) {
+      timer.cancel();
+      timer = null;
+    }
+  }
+
   WebSocketVMTarget target;
   WebSocketVM vm;
 }
-
