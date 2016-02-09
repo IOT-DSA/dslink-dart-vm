@@ -135,13 +135,13 @@ class VMNode extends SimpleNode {
     });
 
     link.addNode("${path}/PID", {
-      r"$type": "int",
+      r"$type": "number",
       "?value": vm.pid
     });
-    
+
     link.addNode("${path}/Architecture_Bits", {
       r"$name": "Architecture Bits",
-      r"$type": "int",
+      r"$type": "number",
       "?value": vm.architectureBits
     });
 
@@ -152,7 +152,7 @@ class VMNode extends SimpleNode {
     });
 
     link.addNode("${path}/Uptime", {
-      r"$type": "int",
+      r"$type": "number",
       "?value": vm.upTime.inMilliseconds,
       "@unit": "ms"
     });
@@ -185,6 +185,8 @@ class VMNode extends SimpleNode {
       link.updateValue("${path}/Uptime", vm.upTime.inMilliseconds);
 
       for (Isolate isolate in vm.isolates) {
+        await isolate.reload();
+
         var p = "${path}/Isolates/${isolate.id.split("/").skip(1).join("_")}";
         SimpleNode node = link[p];
 
@@ -202,7 +204,7 @@ class VMNode extends SimpleNode {
             "New_Generation": {
               r"$name": "New Generation",
               "Collections": {
-                r"$type": "int",
+                r"$type": "number",
                 "?value": isolate.newSpace.collections
               },
               "Average_Collection_Interval": {
@@ -212,17 +214,17 @@ class VMNode extends SimpleNode {
                 "@unit": "ms"
               },
               "Used": {
-                r"$type": "int",
+                r"$type": "number",
                 r"@unit": "bytes",
                 "?value": isolate.newSpace.used
               },
               "Capacity": {
-                r"$type": "int",
+                r"$type": "number",
                 "@unit": "bytes",
                 "?value": isolate.newSpace.capacity
               },
               "External": {
-                r"$type": "int",
+                r"$type": "number",
                 "@unit": "bytes",
                 "?value": isolate.newSpace.external
               }
@@ -230,7 +232,7 @@ class VMNode extends SimpleNode {
             "Old_Generation": {
               r"$name": "Old Generation",
               "Collections": {
-                r"$type": "int",
+                r"$type": "number",
                 "?value": isolate.oldSpace.collections
               },
               "Average_Collection_Interval": {
@@ -240,17 +242,17 @@ class VMNode extends SimpleNode {
                 "@unit": "ms"
               },
               "Used": {
-                r"$type": "int",
+                r"$type": "number",
                 r"@unit": "bytes",
                 "?value": isolate.oldSpace.used
               },
               "Capacity": {
-                r"$type": "int",
+                r"$type": "number",
                 "@unit": "bytes",
                 "?value": isolate.oldSpace.capacity
               },
               "External": {
-                r"$type": "int",
+                r"$type": "number",
                 "@unit": "bytes",
                 "?value": isolate.oldSpace.external
               }
@@ -261,7 +263,7 @@ class VMNode extends SimpleNode {
               "?value": isolate.startTime.toString()
             },
             "Uptime": {
-              r"$type": "int",
+              r"$type": "number",
               "?value": isolate.upTime.inMilliseconds,
               "@unit": "ms"
             },
@@ -275,7 +277,11 @@ class VMNode extends SimpleNode {
             }
           });
         } else {
-          var u = (n, v) => link.val("${node.path}/${n}", v);
+          var u = (n, v) {
+            try {
+              link.val("${node.path}/${n}", v);
+            } catch (e) {}
+          };
           u("Execute", isolate.running ? isolate.topFrame.location.toString() : "Idle");
           u("Running", isolate.running);
           for (var a in const ["New", "Old"]) {
@@ -303,7 +309,7 @@ class VMNode extends SimpleNode {
 
     await update();
 
-    timer = Scheduler.every(Interval.HALF_SECOND, () async {
+    timer = Scheduler.every(Interval.TWO_SECONDS, () async {
       try {
         await update();
       } catch (e) {
